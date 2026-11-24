@@ -16,14 +16,15 @@ changes how the kernel reads the keyboard's USB descriptor, and removing it rest
 ## The problem
 
 The keyboard's NKRO report (interface 2, report ID 1, a 120-bit bitmap) is declared `Input(Data,Array)`
-instead of `Input(Data,Variable)`. Every host reads the set bits as "ErrorRollOver" and drops them. The
+instead of `Input(Data,Variable)`. Linux reads the set bits as "ErrorRollOver" and drops them. The
 firmware sends some keys **only** through this report, so on an unpatched system:
 
-- **Snap Tap / SOCD keys never arrive** (also on Windows with the official driver);
+- **Snap Tap / SOCD keys never arrive**;
 - **macros type nothing** (only their modifiers arrive);
 - **keys beyond the first six held at once are lost**.
 
-All Jet75-II firmware versions known (V111–V116) have this bug. Details:
+All Jet75-II firmware versions known (V111–V116) have this bug. Windows is not affected in practice: macros and
+Snap Tap were reported working there without a fix. Details:
 [known issues](https://open-he-mchose.github.io/keyboards/jet75-ii/known-issues/).
 
 Measured on a Jet75-II with the fix (Linux): Snap Tap A/D produced 366 key events instead of 0, never
