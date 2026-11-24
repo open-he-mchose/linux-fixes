@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Attach the HID-BPF NKRO descriptor fix whenever a MCHOSE keyboard (USB VID 0x41E4) is plugged in.
+# The script checks the descriptor itself, touches only the known broken layout and logs to
+# /run/mchose-nkro-fix.log. Running it more than once is harmless.
+ACTION=="add", SUBSYSTEM=="hid", ENV{HID_ID}=="0003:000041E4:*", RUN+="@SBINDIR@/mchose-nkro-fix load"

@@ -1,0 +1,7 @@
+# build artefacts (make)
+nkro-fix/vmlinux.h
+nkro-fix/*.o
+nkro-fix/*.skel.h
+nkro-fix/mchose-nkro-fix-loader
+71-mchose-nkro-fix.rules
+mchose-nkro-fix.service

@@ -1,0 +1,147 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Attach, remove or inspect the HID-BPF NKRO descriptor fix for MCHOSE keyboards (USB VID 0x41E4).
+#
+#   mchose-nkro-fix load     attach the fix to every connected device with the known broken descriptor (root)
+#   mchose-nkro-fix unload   remove the fix from all devices; the original descriptor comes back (root)
+#   mchose-nkro-fix status   show the descriptor state, pinned links, installed files and the last log lines
+#   mchose-nkro-fix log      show the log of load / unload runs (since boot)
+#
+# Called by udev (71-mchose-nkro-fix.rules) on every plug-in; safe to run any number of times.
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+LOADER=${MCHOSE_NKRO_LOADER:-$HERE/mchose-nkro-fix-loader}
+PIN_DIR=/sys/fs/bpf/mchose-nkro-fix
+LEGACY_PIN_DIR=/sys/fs/bpf/jet75-hid-fix     # pins made by the old jet75-hid-fix script
+LOG=/run/mchose-nkro-fix.log
+LOCK=/run/mchose-nkro-fix.lock
+# First 23 bytes of the known NKRO report descriptor; byte 24 is 00 (broken) or 02 (fixed).
+PREFIX23=05010906a101850105071900297c150025019578750181
+
+log() {
+	echo "$*"
+	echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG" 2>/dev/null
+	command -v logger >/dev/null 2>&1 && logger -t mchose-nkro-fix -- "$*" 2>/dev/null
+	return 0
+}
+
+desc_state() {   # broken | fixed | other
+	h=$(head -c 24 "$1/report_descriptor" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+	case "$h" in
+	"${PREFIX23}00") echo broken ;;
+	"${PREFIX23}02") echo fixed ;;
+	*) echo other ;;
+	esac
+}
+
+devices() {      # HID devices of MCHOSE keyboards whose descriptor starts like the known one
+	for d in /sys/bus/hid/devices/0003:41E4:*.*; do
+		[ -e "$d/report_descriptor" ] || continue
+		[ "$(desc_state "$d")" = other ] || echo "$d"
+	done
+}
+
+hid_id() { echo $((0x${1##*.})); }
+
+drop_stale_pins() {   # links of devices that were unplugged meanwhile
+	for pin in "$PIN_DIR"/hid* "$LEGACY_PIN_DIR"/hid*; do
+		[ -e "$pin" ] || continue
+		n=${pin##*/hid}
+		ls /sys/bus/hid/devices/*."$(printf %04X "$n")" >/dev/null 2>&1 || rm -f "$pin"
+	done
+}
+
+need_root() {
+	[ "$(id -u)" = 0 ] || { echo "$1 needs root (sudo $0 $1)"; exit 1; }
+}
+
+case "$1" in
+load)
+	need_root load
+	if command -v flock >/dev/null 2>&1; then   # udev starts one run per interface at once
+		exec 9>"$LOCK"
+		flock -w 30 9
+	fi
+	if [ -n "$ACTION" ]; then
+		log "load: started by udev ($ACTION ${DEVPATH##*/})"
+	else
+		log "load: started manually"
+	fi
+	[ -x "$LOADER" ] || { log "load: loader not found at $LOADER"; exit 1; }
+	mountpoint -q /sys/fs/bpf || mount -t bpf bpf /sys/fs/bpf || { log "load: cannot mount bpffs on /sys/fs/bpf"; exit 1; }
+	mkdir -p "$PIN_DIR" || { log "load: cannot create $PIN_DIR"; exit 1; }
+	drop_stale_pins
+	found=0
+	rc=0
+	for d in $(devices); do
+		found=1
+		name=${d##*/}
+		id=$(hid_id "$d")
+		if [ "$(desc_state "$d")" = fixed ]; then
+			log "load: $name already fixed"
+			continue
+		fi
+		rm -f "$PIN_DIR/hid$id"
+		if out=$("$LOADER" "$id" "$PIN_DIR/hid$id" 2>&1); then
+			log "load: $name: $out"
+		else
+			log "load: $name FAILED: $out"
+			rc=1
+		fi
+	done
+	[ "$found" = 1 ] || log "load: no MCHOSE device with the known descriptor present (yet)"
+	exit $rc
+	;;
+unload)
+	need_root unload
+	n=0
+	for pin in "$PIN_DIR"/hid* "$LEGACY_PIN_DIR"/hid*; do
+		[ -e "$pin" ] || continue
+		rm -f "$pin" && n=$((n + 1))
+	done
+	log "unload: removed $n link(s); the kernel restores the original descriptor"
+	;;
+status)
+	rc=0
+	found=0
+	for d in $(devices); do
+		found=1
+		name=${d##*/}
+		id=$(hid_id "$d")
+		case "$(desc_state "$d")" in
+		fixed) echo "device     : $name - FIXED (NKRO report is Input(Variable))" ;;
+		broken) echo "device     : $name - BROKEN (original descriptor, NKRO report is Input(Array))"; rc=1 ;;
+		esac
+		if [ -e "$PIN_DIR/hid$id" ]; then echo "  bpf link : $PIN_DIR/hid$id"
+		elif [ -e "$LEGACY_PIN_DIR/hid$id" ]; then echo "  bpf link : $LEGACY_PIN_DIR/hid$id (old jet75-hid-fix)"
+		else echo "  bpf link : none"
+		fi
+	done
+	[ "$found" = 1 ] || { echo "device     : no MCHOSE keyboard with the known descriptor connected"; rc=1; }
+	if [ -x "$LOADER" ]; then echo "loader     : $LOADER"; else echo "loader     : missing ($LOADER)"; rc=1; fi
+	for f in /etc/udev/rules.d/71-mchose-nkro-fix.rules /etc/udev/rules.d/70-mchose-hidraw.rules \
+		/etc/systemd/system/mchose-nkro-fix.service; do
+		[ -e "$f" ] && echo "installed  : $f"
+	done
+	for f in /etc/udev/rules.d/71-jet75-hid-fix.rules /usr/local/sbin/jet75-hid-fix; do
+		[ -e "$f" ] && echo "old files  : $f (remove: make uninstall-legacy)"
+	done
+	if [ -s "$LOG" ]; then
+		echo "last log   :"
+		tail -n 5 "$LOG" | sed 's/^/  /'
+	else
+		echo "last log   : none since boot ($LOG)"
+	fi
+	exit $rc
+	;;
+log)
+	if [ -s "$LOG" ]; then cat "$LOG"; else echo "no log since boot ($LOG)"; fi
+	;;
+*)
+	echo "usage: $0 load|unload|status|log"
+	exit 2
+	;;
+esac

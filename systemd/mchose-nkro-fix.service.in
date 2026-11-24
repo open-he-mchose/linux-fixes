@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Boot-time fallback for the udev rule: attach the MCHOSE NKRO descriptor fix once the system is up.
+[Unit]
+Description=MCHOSE keyboard NKRO descriptor fix (HID-BPF)
+After=systemd-udevd.service systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+ExecStart=@SBINDIR@/mchose-nkro-fix load
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# MCHOSE keyboards (USB VID 0x41E4): give the logged-in user (uaccess) and members of 'plugdev' access to
+# the raw HID interfaces, so configuration tools work without root.
+# The 'plugdev' group is optional; udev only warns if it does not exist.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="41e4", MODE="0660", GROUP="plugdev", TAG+="uaccess"
