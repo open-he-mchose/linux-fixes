@@ -74,6 +74,13 @@ load)
 	mountpoint -q /sys/fs/bpf || mount -t bpf bpf /sys/fs/bpf || { log "load: cannot mount bpffs on /sys/fs/bpf"; exit 1; }
 	mkdir -p "$PIN_DIR" || { log "load: cannot create $PIN_DIR"; exit 1; }
 	drop_stale_pins
+	# At boot udev may run us before the device is fully readable: retry for a while (udev runs only).
+	tries=1
+	[ -n "$ACTION" ] && tries=20
+	while [ -z "$(devices)" ] && [ "$tries" -gt 1 ]; do
+		sleep 0.5
+		tries=$((tries - 1))
+	done
 	found=0
 	rc=0
 	for d in $(devices); do
@@ -92,7 +99,17 @@ load)
 			rc=1
 		fi
 	done
-	[ "$found" = 1 ] || log "load: no MCHOSE device with the known descriptor present (yet)"
+	if [ "$found" != 1 ]; then
+		log "load: no MCHOSE device with the known descriptor present (yet)"
+		for d in /sys/bus/hid/devices/0003:41E4:*.*; do   # what was there instead (diagnostics)
+			[ -e "$d" ] || continue
+			if [ -r "$d/report_descriptor" ]; then
+				log "load:   ${d##*/}: descriptor starts $(head -c 24 "$d/report_descriptor" 2>/dev/null | od -An -tx1 | tr -s ' \n' ' ')"
+			else
+				log "load:   ${d##*/}: report_descriptor not readable"
+			fi
+		done
+	fi
 	exit $rc
 	;;
 unload)
